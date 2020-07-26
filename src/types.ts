@@ -20,7 +20,9 @@ import { DataQuery, DataSourceJsonData } from '@grafana/ui';
 
 export interface BoltQuery extends DataQuery {
   query: string;
-  topicName: string;
+  error: string;
+  parsingStream: string;
+  filteringStream: string;
 }
 
 export interface BoltOptions extends DataSourceJsonData {

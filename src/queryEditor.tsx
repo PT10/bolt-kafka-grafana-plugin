@@ -19,10 +19,11 @@ import React from 'react';
 import { PureComponent } from 'react';
 
 // Types
-import { BoltDatasource } from './datasource';
+import BoltDatasource from './datasource';
 import { BoltQuery, BoltOptions } from './types';
 
 import { QueryEditorProps, FormField } from '@grafana/ui';
+import { getBackendSrv } from '@grafana/runtime';
 
 type Props = QueryEditorProps<BoltDatasource, BoltQuery, BoltOptions>;
 
@@ -30,9 +31,13 @@ interface State extends BoltQuery {}
 
 export class BoltQueryEditor extends PureComponent<Props, State> {
   query: BoltQuery;
+  backendSrv: any;
+  ksqlUrl = '';
 
   constructor(props: Props) {
     super(props);
+    this.ksqlUrl = props.datasource.baseUrl + '/ksql';
+    this.backendSrv = getBackendSrv();
 
     const { query } = this.props;
     this.query = query;
@@ -40,7 +45,9 @@ export class BoltQueryEditor extends PureComponent<Props, State> {
     this.state = {
       ...this.state,
       query: '/topics/$TOPICNAME/partitions/0/messages',
-      topicName: query.topicName || '',
+      error: query.error || '',
+      parsingStream: query.parsingStream || '',
+      filteringStream: query.filteringStream || '',
     };
 
     const { onChange } = this.props;
@@ -51,26 +58,56 @@ export class BoltQueryEditor extends PureComponent<Props, State> {
   }
 
   render() {
-    const { topicName } = this.state;
+    const { error, parsingStream, filteringStream } = this.state;
     const labelWidth = 8;
-
+    const labelStyle = {
+      color: 'red',
+    };
     return (
       <div>
+        {error && (
+          <div className="gf-form-inline">
+            <div className="gf-form">
+              <div className="gf-form">
+                <label style={labelStyle}>{error}</label>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="gf-form-inline">
           <div className="gf-form">
             <div className="gf-form">
               <FormField
-                label="Topic Name"
+                label="Parse Stream"
                 type="text"
-                value={topicName}
+                value={parsingStream}
                 labelWidth={labelWidth}
-                width={4}
-                name="topicName"
+                inputWidth={30}
+                name="parsingStream"
                 onChange={this.onFieldValueChange}
+                onBlur={this.onChangeQueryDetected}
               ></FormField>
             </div>
           </div>
         </div>
+        {parsingStream && (
+          <div className="gf-form-inline">
+            <div className="gf-form">
+              <div className="gf-form">
+                <FormField
+                  label="Filter Stream (Optional)"
+                  type="text"
+                  value={filteringStream}
+                  labelWidth={labelWidth}
+                  inputWidth={30}
+                  name="filteringStream"
+                  onChange={this.onFieldValueChange}
+                  onBlur={this.onChangeQueryDetected}
+                ></FormField>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -88,6 +125,113 @@ export class BoltQueryEditor extends PureComponent<Props, State> {
     onChange({
       ...this.props.query,
       [name]: value,
+    });
+  };
+
+  onChangeQueryDetected = (event: any, _name?: string) => {
+    this.clearError();
+    const stream: any = event.target.value.match(/CREATE STREAM (.*?) .*/i);
+    const table: any = event.target.value.match(/CREATE TABLE (.*?) .*/i);
+
+    if (stream && event.target.name === 'parsingStream') {
+      this.createStreamIfNotExists(stream[1], event.target.value);
+    } else if (table && event.target.name === 'filteringStream') {
+      this.createTable(event.target.value);
+    } else {
+    }
+  };
+
+  createStreamIfNotExists = (_name: string, _query: string) => {
+    const options = {
+      url: this.ksqlUrl,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/vnd.ksql.v1+json; charset=utf-8' },
+      params: undefined,
+      data: '{"ksql": "LIST STREAMS;"}',
+    };
+
+    this.backendSrv.datasourceRequest(options).then(
+      (response: any) => {
+        if (response.status === 200) {
+          console.log(response);
+          // Check if exists and if not then create
+          const data = response.data;
+          if (data.length > 0) {
+            const str = data[0].streams.find((s: any) => s.type === 'STREAM' && s.name === _name.toUpperCase());
+            if (!str) {
+              this.createParsingStream(_name, _query);
+            } else {
+              console.log('Stream ' + _name + ' already exists');
+            }
+          }
+        } else {
+          console.log('Error');
+        }
+      },
+      (error: any) => {
+        console.log('Error while listing the stream. ' + error);
+      }
+    );
+  };
+
+  createParsingStream = (_name: string, _query: string) => {
+    const payload = { ksql: _query, streamsProperties: { 'ksql.streams.auto.offset.reset': 'earliest' } };
+    const options = {
+      url: this.ksqlUrl,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/vnd.ksql.v1+json; charset=utf-8' },
+      params: undefined,
+      data: JSON.stringify(payload),
+    };
+
+    this.backendSrv.datasourceRequest(options).then(
+      (response: any) => {
+        if (response.status === 200) {
+          //this.createTable(_query);
+          console.log('Stream ' + _name + ' created successfully');
+        }
+      },
+      (error: any) => {
+        console.log('Error while creating the stream. ' + error);
+        this.setError(error.data.message);
+      }
+    );
+  };
+
+  createTable = (_query: string) => {
+    const payload = { ksql: _query, streamsProperties: { 'ksql.streams.auto.offset.reset': 'earliest' } };
+    const options = {
+      url: this.ksqlUrl,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/vnd.ksql.v1+json; charset=utf-8' },
+      params: undefined,
+      data: JSON.stringify(payload),
+    };
+
+    this.backendSrv.datasourceRequest(options).then(
+      (response: any) => {
+        if (response.status === 200) {
+          console.log('Filter creation successful');
+        }
+      },
+      (error: any) => {
+        console.log('Error while creating the filter. ' + error.data.message);
+        this.setError(error.data.message);
+      }
+    );
+  };
+
+  setError = (error: string) => {
+    this.setState({
+      ...this.state,
+      error: error,
+    });
+  };
+
+  clearError = () => {
+    this.setState({
+      ...this.state,
+      error: '',
     });
   };
 }

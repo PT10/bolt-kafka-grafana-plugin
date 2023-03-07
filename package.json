@@ -14,7 +14,7 @@
     "@grafana/data": "latest",
     "@grafana/runtime": "latest",
     "@grafana/toolkit": "next",
-    "@grafana/ui": "^6.3.2",
+    "@grafana/ui": "^9.4.3",
     "@types/lodash": "^4.14.138",
     "react": "^16.9.0",
     "react-dom": "16.9.0",
